@@ -649,7 +649,7 @@ tr:hover{{background:#f8f9fa}}
 <div class="legend-item"><div class="legend-box" style="background:#C8E6C9;border-color:#388E3C"></div><span><strong>Calculated Fields</strong> (formulas)</span></div>
 <div class="legend-item"><div class="legend-box" style="background:#fff;border:3px solid #FF1744"></div><span><strong>High Impact Field</strong> (group)</span></div>
 <div class="legend-item"><div class="legend-box" style="background:#fff;border:3px solid #FFD600"></div><span><strong>Medium Impact Fields</strong> (group)</span></div>
-<div class="legend-item"><div class="legend-box" style="background:#fff;border:3px solid #388E3C"></div><span><strong>Medium Impact Fields</strong> (group)</span></div>
+<div class="legend-item"><div class="legend-box" style="background:#fff;border:3px solid #388E3C"></div><span><strong>Low Impact Fields</strong> (group)</span></div>
 </div>
 <div class="diagram-wrapper">
 <div class="diagram-controls">
