@@ -238,6 +238,21 @@ def calculate_impact_metrics(df_fields, dep_graph, rev_graph, node_info_map):
     return pd.DataFrame(results).sort_values('total_impact_count', ascending=False)
 
 def generate_mermaid_diagram(df_impact, relationships, node_info_map):
+    MAX_NODES = 300
+    MAX_EDGES = 500
+   
+    filtered_rels = relationships
+    filtered_df = df_impact
+   
+    if len(relationships) > MAX_EDGES or len(df_impact) > MAX_NODES:
+        impact_nodes = set(df_impact[df_impact['total_impact_count'] > 0]['node_id'].tolist()[:MAX_NODES])
+        filtered_rels = [r for r in relationships if r['source_node'] in impact_nodes or r['target_node'] in impact_nodes][:MAX_EDGES]
+        rel_nodes = set()
+        for r in filtered_rels:
+            rel_nodes.add(r['source_node'])
+            rel_nodes.add(r['target_node'])
+        filtered_df = df_impact[df_impact['node_id'].isin(rel_nodes | impact_nodes)]
+   
     lines = ["graph LR", "",
              f"    classDef defaultField fill:{COLORS['default_field']},stroke:{COLORS['default_field_stroke']},stroke-width:3px",
              f"    classDef parameter fill:{COLORS['parameter']},stroke:{COLORS['parameter_stroke']},stroke-width:3px",
@@ -246,7 +261,7 @@ def generate_mermaid_diagram(df_impact, relationships, node_info_map):
    
     defined = set()
     nodes_in_rels = set()
-    for rel in relationships:
+    for rel in filtered_rels:
         nodes_in_rels.add(rel['source_node'])
         nodes_in_rels.add(rel['target_node'])
    
@@ -255,7 +270,7 @@ def generate_mermaid_diagram(df_impact, relationships, node_info_map):
         ('MEDIUM', 'mediumDep', '🟡 Medium Dependency - 2-4 Impacts'),
         ('LOW', 'lowDep', '🟢 Low Dependency - 1 Impact')
     ]:
-        subset = df_impact[(df_impact['dependency_level'] == level) & (df_impact['total_impact_count'] > 0)]
+        subset = filtered_df[(filtered_df['dependency_level'] == level) & (filtered_df['total_impact_count'] > 0)]
         if len(subset) > 0:
             lines.append(f'    subgraph {css_id}["{label}"]')
             for _, r in subset.iterrows():
@@ -275,7 +290,7 @@ def generate_mermaid_diagram(df_impact, relationships, node_info_map):
             defined.add(n)
    
     lines.append('')
-    for rel in relationships:
+    for rel in filtered_rels:
         if rel['source_node'] in defined and rel['target_node'] in defined:
             lines.append(f"    {rel['source_node']} --> {rel['target_node']}")
    
@@ -385,7 +400,7 @@ def generate_complete_html(df_impact, df_all_fields, relationships, node_info_ma
 <title>{workbook_name} - Dependency Analysis v7.9</title>
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-mermaid.initialize({{startOnLoad:true,theme:'base',flowchart:{{useMaxWidth:false,htmlLabels:true,curve:'basis',padding:50,rankSpacing:200,nodeSpacing:150}},maxTextSize:50000000,securityLevel:'loose'}});
+mermaid.initialize({{startOnLoad:true,theme:'base',flowchart:{{useMaxWidth:false,htmlLabels:true,curve:'basis',padding:50,rankSpacing:200,nodeSpacing:150}},maxTextSize:90000000,maxEdges:2000,securityLevel:'loose'}});
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
