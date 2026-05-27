@@ -75,6 +75,34 @@ def parse_tableau_file(file_path):
         tree = ET.parse(file_path)
     return tree.getroot()
 
+def get_worksheet_used_fields(root):
+    used_fields = set()
+    for worksheet in root.findall('.//worksheet'):
+        for elem in worksheet.iter():
+            for attr_val in elem.attrib.values():
+                attr_str = str(attr_val)
+                if '[' in attr_str and ']' in attr_str:
+                    for m in re.findall(r'\[([^\[\]]+)\]', attr_str):
+                        cleaned = m.strip()
+                        if cleaned and cleaned != 'Parameters':
+                            used_fields.add(cleaned)
+                            used_fields.add(f'[{cleaned}]')
+            if elem.text:
+                text_str = str(elem.text)
+                if '[' in text_str and ']' in text_str:
+                    for m in re.findall(r'\[([^\[\]]+)\]', text_str):
+                        cleaned = m.strip()
+                        if cleaned and cleaned != 'Parameters':
+                            used_fields.add(cleaned)
+                            used_fields.add(f'[{cleaned}]')
+    for ds_dep in root.findall('.//datasource-dependencies'):
+        for col in ds_dep.findall('.//column'):
+            col_name = col.get('name', '')
+            if col_name:
+                used_fields.add(col_name)
+                used_fields.add(col_name.strip('[]'))
+    return used_fields
+
 def extract_fields_from_xml(root):
     all_fields = []
     field_counter = 0
@@ -106,6 +134,31 @@ def extract_fields_from_xml(root):
             else:
                 field_type = 'Default_Field'
            
+            param_current_value = ''
+            if field_type == 'Parameter':
+                field_refs = set()
+                for elem in column.iter():
+                    for attr_val in elem.attrib.values():
+                        if '[' in str(attr_val) and ']' in str(attr_val):
+                            for m in re.findall(r'\[([^\[\]]+)\]', str(attr_val)):
+                                cleaned = m.strip()
+                                if cleaned and cleaned != field_id.strip('[]') and not cleaned.startswith('Parameters'):
+                                    field_refs.add(cleaned)
+                    if elem.text and '[' in str(elem.text):
+                        for m in re.findall(r'\[([^\[\]]+)\]', str(elem.text)):
+                            cleaned = m.strip()
+                            if cleaned and cleaned != field_id.strip('[]') and not cleaned.startswith('Parameters'):
+                                field_refs.add(cleaned)
+                if calc_elem is not None:
+                    calc_formula = calc_elem.get('formula', '')
+                    if calc_formula:
+                        for m in re.findall(r'\[([^\[\]]+)\]', calc_formula):
+                            cleaned = m.strip()
+                            if cleaned and cleaned != field_id.strip('[]') and not cleaned.startswith('Parameters'):
+                                field_refs.add(cleaned)
+                if field_refs:
+                    param_current_value = ' '.join(f'[{r}]' for r in field_refs)
+
             all_fields.append({
                 'index': field_counter,
                 'datasource_name': ds_name,
@@ -116,6 +169,7 @@ def extract_fields_from_xml(root):
                 'field_calculation': calculation if calculation else None,
                 'field_datatype': column.get('datatype', ''),
                 'field_type': field_type,
+                'param_current_value': param_current_value if field_type == 'Parameter' else '',
             })
             field_counter += 1
    
@@ -128,6 +182,31 @@ def extract_fields_from_xml(root):
         param_caption = param.get('caption')
         display_name = param_caption if param_caption else param_id.strip('[]')
        
+        param_current_value = ''
+        field_refs = set()
+        for elem in param.iter():
+            for attr_val in elem.attrib.values():
+                if '[' in str(attr_val) and ']' in str(attr_val):
+                    for m in re.findall(r'\[([^\[\]]+)\]', str(attr_val)):
+                        cleaned = m.strip()
+                        if cleaned and cleaned != param_id.strip('[]') and not cleaned.startswith('Parameters'):
+                            field_refs.add(cleaned)
+            if elem.text and '[' in str(elem.text):
+                for m in re.findall(r'\[([^\[\]]+)\]', str(elem.text)):
+                    cleaned = m.strip()
+                    if cleaned and cleaned != param_id.strip('[]') and not cleaned.startswith('Parameters'):
+                        field_refs.add(cleaned)
+        calc_elem = param.find('calculation')
+        if calc_elem is not None:
+            calc_formula = calc_elem.get('formula', '')
+            if calc_formula:
+                for m in re.findall(r'\[([^\[\]]+)\]', calc_formula):
+                    cleaned = m.strip()
+                    if cleaned and cleaned != param_id.strip('[]') and not cleaned.startswith('Parameters'):
+                        field_refs.add(cleaned)
+        if field_refs:
+            param_current_value = ' '.join(f'[{r}]' for r in field_refs)
+
         all_fields.append({
             'index': field_counter,
             'datasource_name': 'Parameters',
@@ -138,9 +217,31 @@ def extract_fields_from_xml(root):
             'field_calculation': None,
             'field_datatype': param.get('datatype', ''),
             'field_type': 'Parameter',
+            'param_current_value': param_current_value,
         })
         field_counter += 1
    
+    param_control_refs = {}
+    for pc in root.iter():
+        if 'parameter' in pc.tag.lower() or 'filter' in pc.tag.lower():
+            param_name = pc.get('name', '') or pc.get('param', '') or pc.get('parameter', '')
+            field_ref = pc.get('field', '') or pc.get('column', '') or pc.get('source', '')
+            if param_name and field_ref and '[' in field_ref:
+                param_key = param_name.strip('[]').replace('[Parameters].', '').replace('Parameters.', '').strip('[]')
+                for m in re.findall(r'\[([^\[\]]+)\]', field_ref):
+                    if m and m != 'Parameters' and not m.startswith('Parameters'):
+                        if param_key not in param_control_refs:
+                            param_control_refs[param_key] = set()
+                        param_control_refs[param_key].add(m)
+   
+    for i, entry in enumerate(all_fields):
+        if entry['field_type'] == 'Parameter' and not entry['param_current_value']:
+            param_name_clean = entry['field_name']
+            param_id_clean = entry['field_id'].strip('[]')
+            refs = param_control_refs.get(param_name_clean) or param_control_refs.get(param_id_clean)
+            if refs:
+                all_fields[i]['param_current_value'] = ' '.join(f'[{r}]' for r in refs)
+
     df = pd.DataFrame(all_fields)
     if len(df) > 0:
         df['index'] = range(len(df))
@@ -199,6 +300,40 @@ def analyze_field_dependencies(df_fields, field_name_map, field_id_map, node_inf
             })
             dep_graph[dep_node].append(calc_node)
             rev_graph[calc_node].append(dep_node)
+   
+    for _, row in df_fields[df_fields['field_type'] == 'Parameter'].iterrows():
+        param_node = f"{row['field_type'][:3].upper()}_{row['index']}"
+        param_cv = row.get('param_current_value', '')
+        if not param_cv or pd.isna(param_cv):
+            continue
+        param_cv = str(param_cv)
+        refs = re.findall(r'\[([^\]]+)\]', param_cv)
+        for ref in refs:
+            ref_clean = ref.strip()
+            dep_node = None
+            search_variants = [ref_clean, ref_clean.lower(), f'[{ref_clean}]', f'[{ref_clean}]'.lower()]
+            if '.' in ref_clean:
+                parts = ref_clean.split('.')
+                field_part = parts[-1].strip('[] ')
+                search_variants.extend([field_part, field_part.lower(), f'[{field_part}]', f'[{field_part}]'.lower()])
+            for variant in search_variants:
+                if variant in field_id_map:
+                    dep_node = field_id_map[variant]
+                    break
+                if variant in field_name_map:
+                    dep_node = field_name_map[variant]
+                    break
+            if dep_node and dep_node != param_node and dep_node in node_info_map:
+                if (dep_node, param_node) not in processed:
+                    processed.add((dep_node, param_node))
+                    relationships.append({
+                        'source_node': dep_node,
+                        'target_node': param_node,
+                        'source_name': node_info_map[dep_node]['field_name'],
+                        'target_name': row['field_name']
+                    })
+                    dep_graph[dep_node].append(param_node)
+                    rev_graph[param_node].append(dep_node)
    
     return relationships, dep_graph, rev_graph
 
@@ -354,7 +489,9 @@ def create_html_table_rows(df_subset, node_info_map, include_formula=False):
         </tr>''')
     return ''.join(rows)
 
-def generate_complete_html(df_impact, df_all_fields, relationships, node_info_map, workbook_name):
+def generate_complete_html(df_impact, df_all_fields, relationships, node_info_map, workbook_name, ws_used_fields=None):
+    if ws_used_fields is None:
+        ws_used_fields = set()
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
    
     total_fields = len(df_impact)
@@ -366,6 +503,22 @@ def generate_complete_html(df_impact, df_all_fields, relationships, node_info_ma
     low_dep_count = len(df_impact[df_impact['dependency_level'] == 'LOW'])
     none_dep_count = len(df_impact[df_impact['dependency_level'] == 'NONE'])
     total_deps = len(relationships)
+   
+    def is_unused(row):
+        if row['total_impact_count'] > 0 or row['dependency_count'] > 0:
+            return False
+        fid = row.get('node_id', '')
+        info = node_info_map.get(fid, {})
+        field_id = info.get('field_id', '')
+        field_name = info.get('field_name', '')
+        if field_id in ws_used_fields or field_id.strip('[]') in ws_used_fields:
+            return False
+        if field_name in ws_used_fields or field_name.lower() in ws_used_fields:
+            return False
+        return True
+   
+    df_unused = df_impact[df_impact.apply(is_unused, axis=1)]
+    unused_count = len(df_unused)
    
     mermaid_code = generate_mermaid_diagram(df_impact, relationships, node_info_map)
    
@@ -386,6 +539,7 @@ def generate_complete_html(df_impact, df_all_fields, relationships, node_info_ma
     table_default = create_html_table_rows(df_impact[df_impact['field_type'] == 'Default_Field'], node_info_map, False)
     table_params = create_html_table_rows(df_impact[df_impact['field_type'] == 'Parameter'], node_info_map, False)
     table_calc = create_html_table_rows(df_impact[df_impact['field_type'] == 'Calculated_Field'], node_info_map, True)
+    table_unused = create_html_table_rows(df_unused, node_info_map, False)
    
     th_normal = '<thead><tr><th>#</th><th>Level</th><th>Field Name</th><th>Datasource</th><th>Type</th><th>Direct</th><th>Indirect</th><th>Total</th><th>Deps</th><th>Direct Impacts</th><th>Indirect Impacts</th><th>Depends On</th></tr></thead>'
     th_formula = '<thead><tr><th>#</th><th>Level</th><th>Field Name</th><th>Datasource</th><th>Type</th><th>Direct</th><th>Indirect</th><th>Total</th><th>Deps</th><th>Direct Impacts</th><th>Indirect Impacts</th><th>Depends On</th><th>Formula</th></tr></thead>'
@@ -604,6 +758,7 @@ tr:hover{{background:#f8f9fa}}
 <button class="tab-button" onclick="openTab(event,'tab-default')">📁 Default ({len(df_impact[df_impact['field_type']=='Default_Field'])})</button>
 <button class="tab-button" onclick="openTab(event,'tab-params')">⚙️ Parameters ({len(df_impact[df_impact['field_type']=='Parameter'])})</button>
 <button class="tab-button" onclick="openTab(event,'tab-calc')">🔢 Calculated ({len(df_impact[df_impact['field_type']=='Calculated_Field'])})</button>
+<button class="tab-button" onclick="openTab(event,'tab-unused')">🚫 Unused ({unused_count})</button>
 </div>
 
 <div id="tab-all" class="tab-content active">
@@ -652,6 +807,12 @@ tr:hover{{background:#f8f9fa}}
 <div class="tab-header"><div class="tab-title">Calculated Fields (with Formulas)</div><button class="download-excel-btn" onclick="downloadExcel('tbl-calc','Calculated_Fields')">{excel_icon} Download Excel</button></div>
 <input type="text" class="search-box" placeholder="🔎 Search fields..." onkeyup="searchTable('tbl-calc',this.value)">
 <div class="table-wrapper"><table id="tbl-calc">{th_formula}<tbody>{table_calc}</tbody></table></div>
+</div>
+
+<div id="tab-unused" class="tab-content">
+<div class="tab-header"><div class="tab-title">Unused / Orphan Fields</div><button class="download-excel-btn" onclick="downloadExcel('tbl-unused','Unused_Fields')">{excel_icon} Download Excel</button></div>
+<input type="text" class="search-box" placeholder="🔎 Search fields..." onkeyup="searchTable('tbl-unused',this.value)">
+<div class="table-wrapper"><table id="tbl-unused">{th_normal}<tbody>{table_unused}</tbody></table></div>
 </div>
 </div>
 
@@ -747,6 +908,7 @@ if uploaded_file:
            
             progress.progress(30, "Extracting fields...")
             df_all = extract_fields_from_xml(root)
+            ws_used_fields = get_worksheet_used_fields(root)
            
             if len(df_all) == 0:
                 st.error("❌ No fields found in workbook")
@@ -761,11 +923,11 @@ if uploaded_file:
            
             progress.progress(90, "Generating HTML report...")
             wb_name = uploaded_file.name.replace('.twbx', '').replace('.twb', '')
-            html_out = generate_complete_html(df_impact, df_all, rels, node_info, wb_name)
+            html_out = generate_complete_html(df_impact, df_all, rels, node_info, wb_name, ws_used_fields)
            
             progress.progress(100, "Complete!")
            
-            st.session_state.update({'html': html_out, 'df_impact': df_impact, 'df_all': df_all, 'wb_name': wb_name, 'rels': rels, 'done': True})
+            st.session_state.update({'html': html_out, 'df_impact': df_impact, 'df_all': df_all, 'wb_name': wb_name, 'rels': rels, 'ws_used_fields': ws_used_fields, 'done': True})
            
         except Exception as e:
             st.error(f"❌ Error: {e}")
@@ -793,7 +955,7 @@ if st.session_state.get('done'):
     col7.metric("⚙️ Parameters", len(df_all[df_all['field_type'] == 'Parameter']))
     col8.metric("🔗 Dependencies", len(st.session_state['rels']))
    
-    tab1, tab2, tab3, tab4 = st.tabs(["🟠 High Risk", "📊 All Fields", "🔢 Calculated", "📁 Default"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🟠 High Risk", "📊 All Fields", "🔢 Calculated", "🚫 Unused", "📁 Default"])
    
     with tab1:
         high_df = df_impact[df_impact['dependency_level'] == 'HIGH'][['field_name', 'field_type', 'total_impact_count', 'direct_impact_count', 'datasource']].copy()
@@ -811,6 +973,29 @@ if st.session_state.get('done'):
         st.dataframe(calc_df, use_container_width=True, height=300)
    
     with tab4:
+        ws_used = st.session_state.get('ws_used_fields', set())
+        def is_unused_st(row):
+            if row['total_impact_count'] > 0 or row['dependency_count'] > 0:
+                return False
+            fid = row.get('node_id', '')
+            from_info = st.session_state.get('df_all', pd.DataFrame())
+            field_id_val = ''
+            field_name_val = row['field_name']
+            if not from_info.empty:
+                match = from_info[from_info['field_name'] == field_name_val]
+                if len(match) > 0:
+                    field_id_val = match.iloc[0]['field_id']
+            if field_id_val in ws_used or field_id_val.strip('[]') in ws_used:
+                return False
+            if field_name_val in ws_used or field_name_val.lower() in ws_used:
+                return False
+            return True
+        unused_df = df_impact[df_impact.apply(is_unused_st, axis=1)][['field_name', 'field_type', 'datasource']].copy()
+        unused_df.columns = ['Field', 'Type', 'Datasource']
+        st.metric("🚫 Unused Fields", len(unused_df))
+        st.dataframe(unused_df, use_container_width=True, height=300)
+   
+    with tab5:
         def_df = df_impact[df_impact['field_type'] == 'Default_Field'][['field_name', 'dependency_level', 'total_impact_count', 'datasource']].copy()
         def_df.columns = ['Field', 'Risk Level', 'Total Impact', 'Datasource']
         st.dataframe(def_df, use_container_width=True, height=300)
